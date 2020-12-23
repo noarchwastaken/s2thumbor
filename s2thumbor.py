@@ -11,9 +11,11 @@ http://www.wtfpl.net/about/
 
 # Built-in imports
 import argparse
+import urllib
 from pathlib import Path
 
-# Bxternal imports
+# External imports
+import cv2
 from bs4 import BeautifulSoup
 from libthumbor import CryptoURL
 
@@ -34,20 +36,35 @@ def parse_arguments():
                         help='Width of Thumbor-processed images')
     parser.add_argument('--height', type=int, default=0,
                         help='Height of Thumbor-processed images')
+    parser.add_argument('--smart', type=float, default=None,
+                        help='Instead of using a fixed size, \
+                            divide target images by it')
 
     return parser.parse_args()
 
 
-def process_url(crypto, thumbor_site, url, width, height):
+def process_url(crypto, thumbor_site, root, url, width, height, smart):
     """
     Convert url into full, secure Thumbor URL
 
     crypto: CryptoURL, libthumbor object for generating encrypted URL
     thumbor_site: str, Thumbor CDN URL without trailing slash
+    root: Path, Website root
     url: str, Absolute (relative to website root) path of target image
     width: int, Width of target image
     height: int, Height of target image
+    smart: float, Instead of using a fixed size, divide target images by it
     """
+
+    if smart:
+        # Unquote encoded URLs before passing to pathlib
+        unquoted_url = urllib.parse.unquote(url)
+        absolute_path = Path(root, unquoted_url)
+        actual_image = cv2.imread(str(absolute_path))
+
+        h, w, _ = actual_image.shape
+        width = int(w / smart)
+        height = int(h / smart)
 
     encrypted_url = crypto.generate(
         width=width,
@@ -57,15 +74,12 @@ def process_url(crypto, thumbor_site, url, width, height):
     return (thumbor_site + encrypted_url)
 
 
-def main(key, thumbor_site, root, width, height):
+def main(key, root):
     """
     Execution
 
     key: str, Secret to encrypt the Thumbor URL
-    thumbor_site: str, Thumbor CDN URL without trailing slash
     root: Path, Website root
-    width: int, Width of target image
-    height: int, Height of target image
     """
     crypto = CryptoURL(key)
     for i in root.glob('**/*.html'):
@@ -77,26 +91,25 @@ def main(key, thumbor_site, root, width, height):
             src = img['src']
             # Do not process SVGs because doing it is useless
             if not src.endswith('.svg'):
-                # Some links are already absolute paths,
-                # so do not make them absolute again
                 if src.startswith('/'):
-                    # Omit the heading slash
-                    img['src'] = process_url(
-                        crypto, thumbor_site, src[1:], width, height)
-                    print(img['src'])
+                    # Some links are already absolute paths,
+                    # so do not make them absolute again
+                    src = src[1:]
                 else:
-                    # Get the absolute path of the image
-                    abs_src = (str(file.parent.relative_to(root))
-                               + '/'
-                               + src)
-                    img['src'] = process_url(
-                        crypto, thumbor_site, abs_src, width, height)
-                    print(img['src'])
+                    # Get the path of the image relative to the website root
+                    src = (str(file.parent.relative_to(root))
+                           + '/'
+                           + src)
 
-        i.write_text(html.prettify())
+                img['src'] = process_url(
+                        crypto, args.thumbor_site, root, src,
+                        args.width, args.height, args.smart)
+                print(img['src'])
+
+        i.write_text(str(html))
 
 
 if __name__ == '__main__':
     args = parse_arguments()
-    main(args.key, args.thumbor_site,
-         args.root, args.width, args.height)
+    main(args.key,
+         args.root)
